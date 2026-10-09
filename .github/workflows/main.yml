@@ -1,24 +1,56 @@
 
-name: Test MEGA connection
+name: Island Cloud to MEGA
 
 on:
   workflow_dispatch:
+    inputs:
+      download_url:
+        description: "Direct download URL from Island Cloud"
+        required: true
+        type: string
+      filename:
+        description: "Exact filename to save in MEGA"
+        required: true
+        type: string
 
 jobs:
-  test:
+  transfer:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+
     steps:
-      - name: Install official rclone
+      - name: Install rclone
         run: |
           curl -fsSL https://rclone.org/install.sh | sudo bash
-          rclone version
-          rclone help backends | grep -i mega
 
-      - name: Configure and test MEGA
+      - name: Configure MEGA
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
           mkdir -p "$HOME/.config/rclone"
           printf '%s\n' "$RCLONE_CONF" > "$HOME/.config/rclone/rclone.conf"
           chmod 600 "$HOME/.config/rclone/rclone.conf"
-          rclone lsf mega: --max-depth 1
+
+      - name: Check download URL
+        env:
+          DOWNLOAD_URL: ${{ inputs.download_url }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlparse
+          u = urlparse(os.environ["DOWNLOAD_URL"])
+          if u.scheme != "https" or not u.hostname:
+              raise SystemExit("Invalid HTTPS download URL")
+          print("URL format is valid")
+          PY
+
+      - name: Transfer file
+        env:
+          DOWNLOAD_URL: ${{ inputs.download_url }}
+          FILENAME: ${{ inputs.filename }}
+        run: |
+          set -o pipefail
+          curl --fail --location --silent --show-error \
+            --retry 2 \
+            "$DOWNLOAD_URL" \
+          | rclone rcat "mega:$FILENAME" --stats 10s
