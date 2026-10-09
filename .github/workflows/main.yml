@@ -8,10 +8,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Install rclone
+      - name: Install official rclone
         run: |
-          sudo apt-get update
-          sudo apt-get install -y rclone
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version
+          rclone help backends | grep -i mega
 
       - name: Configure and test MEGA
         env:
