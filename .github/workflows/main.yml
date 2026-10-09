@@ -1,4 +1,3 @@
-
 name: Island Cloud to MEGA
 
 on:
@@ -12,6 +11,9 @@ on:
         description: "Exact filename to save in MEGA"
         required: true
         type: string
+
+permissions:
+  contents: read
 
 jobs:
   transfer:
@@ -27,30 +29,55 @@ jobs:
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
+          set -euo pipefail
+          test -n "$RCLONE_CONF" || { echo "Missing repository secret RCLONE_CONF"; exit 1; }
           mkdir -p "$HOME/.config/rclone"
           printf '%s\n' "$RCLONE_CONF" > "$HOME/.config/rclone/rclone.conf"
           chmod 600 "$HOME/.config/rclone/rclone.conf"
+          rclone listremotes | grep -qx 'mega:' || { echo "MEGA remote is not configured"; exit 1; }
 
-      - name: Check download URL
+      - name: Validate inputs
         env:
           DOWNLOAD_URL: ${{ inputs.download_url }}
+          FILENAME: ${{ inputs.filename }}
         run: |
           python3 - <<'PY'
           import os
           from urllib.parse import urlparse
           u = urlparse(os.environ["DOWNLOAD_URL"])
-          if u.scheme != "https" or not u.hostname:
-              raise SystemExit("Invalid HTTPS download URL")
-          print("URL format is valid")
+          if u.scheme != "https" or u.hostname not in {"island-cloud.com", "www.island-cloud.com"}:
+              raise SystemExit("URL must be an HTTPS Island Cloud URL")
+          name = os.environ["FILENAME"].strip()
+          if not name or name.startswith("/") or "\\" in name or any(p in {"", ".", ".."} for p in name.split("/")):
+              raise SystemExit("Invalid filename/path")
+          print("Inputs validated")
           PY
 
-      - name: Transfer file
+      - name: Download from Island Cloud
         env:
           DOWNLOAD_URL: ${{ inputs.download_url }}
+          ISLAND_COOKIE: ${{ secrets.ISLAND_COOKIE }}
+          ISLAND_USER_AGENT: ${{ secrets.ISLAND_USER_AGENT }}
+        run: |
+          set -euo pipefail
+          args=(--fail --location --silent --show-error --retry 2 --connect-timeout 30 --max-time 21600)
+          if [ -n "$ISLAND_COOKIE" ]; then args+=(--header "Cookie: $ISLAND_COOKIE"); fi
+          if [ -n "$ISLAND_USER_AGENT" ]; then args+=(--user-agent "$ISLAND_USER_AGENT"); else args+=(--user-agent "Mozilla/5.0"); fi
+          args+=(--referer "https://island-cloud.com/")
+          code=$(curl "${args[@]}" --output /tmp/island-download.bin --write-out '%{http_code}' "$DOWNLOAD_URL")
+          test "$code" = "200" || { echo "Island Cloud returned HTTP $code"; exit 1; }
+          test -s /tmp/island-download.bin || { echo "Downloaded file is empty"; exit 1; }
+          python3 - <<'PY'
+          import os
+          size = os.path.getsize("/tmp/island-download.bin")
+          print(f"Download completed: {size} bytes ({size / 1024 / 1024:.1f} MiB)")
+          PY
+
+      - name: Upload to MEGA
+        env:
           FILENAME: ${{ inputs.filename }}
         run: |
-          set -o pipefail
-          curl --fail --location --silent --show-error \
-            --retry 2 \
-            "$DOWNLOAD_URL" \
-          | rclone rcat "mega:$FILENAME" --stats 10s
+          set -euo pipefail
+          rclone copyto /tmp/island-download.bin "mega:$FILENAME" --stats 10s --stats-one-line
+          rclone size "mega:$FILENAME"
+          rm -f /tmp/island-download.bin
