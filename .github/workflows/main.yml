@@ -1,5 +1,5 @@
 
-name: Test MEGA configuration
+name: Test MEGA connection
 
 on:
   workflow_dispatch:
@@ -8,13 +8,16 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Check configuration secret
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure and test MEGA
         env:
           RCLONE_CONF: ${{ secrets.RCLONE_CONF }}
         run: |
-          if [ -z "$RCLONE_CONF" ]; then
-            echo "ERROR: RCLONE_CONF is missing"
-            exit 1
-          fi
-          echo "OK: RCLONE_CONF is available"
-          
+          mkdir -p "$HOME/.config/rclone"
+          printf '%s\n' "$RCLONE_CONF" > "$HOME/.config/rclone/rclone.conf"
+          chmod 600 "$HOME/.config/rclone/rclone.conf"
+          rclone lsf mega: --max-depth 1
